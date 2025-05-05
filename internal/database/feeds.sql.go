@@ -21,7 +21,7 @@ VALUES (
     $2,
     $3
 )
-RETURNING id, created_at, updated_at, name, url, user_id
+RETURNING id, created_at, updated_at, last_fetched_at, name, url, user_id
 `
 
 type CreateFeedParams struct {
@@ -37,6 +37,33 @@ func (q *Queries) CreateFeed(ctx context.Context, arg CreateFeedParams) (Feed, e
 		&i.ID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LastFetchedAt,
+		&i.Name,
+		&i.Url,
+		&i.UserID,
+	)
+	return i, err
+}
+
+const getNextFeedToFetch = `-- name: GetNextFeedToFetch :one
+SELECT feeds.id, feeds.created_at, feeds.updated_at, feeds.last_fetched_at, feeds.name, feeds.url, feeds.user_id
+FROM feeds
+WHERE id IN (
+    SELECT feed_follows.feed_id
+    FROM feed_follows
+    WHERE feed_follows.user_id=$1
+)
+ORDER BY feeds.last_fetched_at ASC NULLS FIRST LIMIT 1
+`
+
+func (q *Queries) GetNextFeedToFetch(ctx context.Context, userID uuid.UUID) (Feed, error) {
+	row := q.db.QueryRowContext(ctx, getNextFeedToFetch, userID)
+	var i Feed
+	err := row.Scan(
+		&i.ID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LastFetchedAt,
 		&i.Name,
 		&i.Url,
 		&i.UserID,
@@ -93,4 +120,13 @@ func (q *Queries) LookupFeedByUrl(ctx context.Context, url string) (LookupFeedBy
 	var i LookupFeedByUrlRow
 	err := row.Scan(&i.Name, &i.ID)
 	return i, err
+}
+
+const markFeedFetched = `-- name: MarkFeedFetched :exec
+UPDATE feeds SET updated_at=NOW(), last_fetched_at=NOW() WHERE id=$1
+`
+
+func (q *Queries) MarkFeedFetched(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.ExecContext(ctx, markFeedFetched, id)
+	return err
 }

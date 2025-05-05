@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/coderjcronin/blog/internal/database"
 )
 
 type RSSFeed struct {
@@ -63,16 +65,51 @@ func fetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
 	return rss, nil
 }
 
-func commandAgg(s *state, args ...string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(time.Millisecond*800))
-	defer cancel()
-
-	rss, err := fetchFeed(ctx, "https://www.wagslane.dev/index.xml")
+func scrapeFeeds(s *state, user database.User) error {
+	nextFeed, err := s.db.GetNextFeedToFetch(context.Background(), user.ID)
 	if err != nil {
 		return err
 	}
 
-	fmt.Println(rss)
+	err = s.db.MarkFeedFetched(context.Background(), nextFeed.ID)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(time.Millisecond*800))
+	defer cancel()
+
+	rss, err := fetchFeed(ctx, nextFeed.Url)
+	if err != nil {
+		return err
+	}
+
+	if len(rss.Channel.Item) < 1 {
+		fmt.Printf("%s has no items to view\n", rss.Channel.Title)
+	} else {
+		fmt.Printf("Channel %s:\n", rss.Channel.Title)
+		for _, item := range rss.Channel.Item {
+			fmt.Printf("\t- %s\n", item.Title)
+		}
+	}
+
+	return nil
+}
+
+func commandAgg(s *state, user database.User, args ...string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("invalid number of arguements, missing duration between scrapes")
+	}
+
+	timeBetweenRequests, err := time.ParseDuration(args[0])
+	if err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(timeBetweenRequests)
+	for ; ; <-ticker.C {
+		scrapeFeeds(s, user)
+	}
 
 	return nil
 }
