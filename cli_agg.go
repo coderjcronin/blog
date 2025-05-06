@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/xml"
 	"fmt"
 	"html"
@@ -9,7 +10,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/araddon/dateparse"
 	"github.com/coderjcronin/blog/internal/database"
+	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 type RSSFeed struct {
@@ -57,12 +61,53 @@ func fetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
 	rss.Channel.Title = html.UnescapeString(rss.Channel.Title)
 	rss.Channel.Description = html.UnescapeString(rss.Channel.Description)
 
-	for _, item := range rss.Channel.Item {
+	for i, item := range rss.Channel.Item {
 		item.Title = html.UnescapeString(item.Title)
 		item.Description = html.UnescapeString(item.Description)
+		rss.Channel.Item[i] = item
 	}
 
 	return rss, nil
+}
+
+func addPost(s *state, item RSSItem, feed uuid.UUID) error {
+
+	description := sql.NullString{
+		String: item.Description,
+		Valid:  true,
+	}
+
+	t, err := dateparse.ParseAny(item.PubDate)
+	if err != nil {
+		t = time.Now()
+	}
+	timeStamp := sql.NullTime{
+		Time:  t,
+		Valid: true,
+	}
+
+	returnData, err := s.db.CreatePost(context.Background(), database.CreatePostParams{
+		Title:       item.Title,
+		Url:         item.Link,
+		Description: description,
+		PublishedAt: timeStamp,
+		FeedID:      feed,
+	})
+	if err != nil {
+		pqErr, ok := err.(*pq.Error)
+		if ok && pqErr.Code == "23505" {
+			// Handle the unique constraint violation
+			// For example, you can return a specific error message to the client
+			fmt.Printf("%s already exists, skipping...\n", item.Title)
+			return nil
+		} else {
+			return err
+		}
+	}
+
+	fmt.Printf("Added '%s' to posts.\n", returnData.Title)
+
+	return nil
 }
 
 func scrapeFeeds(s *state, user database.User) error {
@@ -85,11 +130,14 @@ func scrapeFeeds(s *state, user database.User) error {
 	}
 
 	if len(rss.Channel.Item) < 1 {
-		fmt.Printf("%s has no items to view\n", rss.Channel.Title)
+		return nil
 	} else {
 		fmt.Printf("Channel %s:\n", rss.Channel.Title)
 		for _, item := range rss.Channel.Item {
-			fmt.Printf("\t- %s\n", item.Title)
+			err = addPost(s, item, nextFeed.ID)
+			if err != nil {
+				fmt.Println(err)
+			}
 		}
 	}
 
@@ -111,5 +159,4 @@ func commandAgg(s *state, user database.User, args ...string) error {
 		scrapeFeeds(s, user)
 	}
 
-	return nil
 }

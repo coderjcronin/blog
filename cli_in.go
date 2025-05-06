@@ -33,6 +33,11 @@ func getCommands() map[string]cliCommand {
 			description: "Aggregates RSS feeds followed based on <time_between_reqs> (duration string)",
 			callback:    middlewareLoggedIn(commandAgg),
 		},
+		"browse": {
+			name:        "browse",
+			description: "Browse through aggregated posts, specify number of posts (defaults to 2)",
+			callback:    middlewareLoggedIn(commandBrowse),
+		},
 		"addfeed": {
 			name:        "addfeed",
 			description: "Adds feed with <name> and <url>",
